@@ -151,7 +151,7 @@ tbl = table('Size',[n_rxns,3],'VariableNames',{'Model','Reactions','Aggregate_Fl
 Model = {}; Reactions = {}; 
 for m=1:n_models
     model = models{m};
-    Model = [Model;repmat(modelNames{m},numel(model.rxns),1)];
+    Model = [Model;repmat(modelNames(m),numel(model.rxns),1)];
     Reactions = [Reactions;model.rxns];
 end
 tbl.Model = Model; tbl.Reactions = Reactions; tbl.Aggregate_Flux = V;
