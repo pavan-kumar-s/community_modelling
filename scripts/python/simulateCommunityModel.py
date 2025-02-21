@@ -36,7 +36,7 @@ def merge_models(models):
     return merged_model
 
 
-def add_biomass_weight_and_update_constraints(merged_model, modelNames):
+def add_biomass_weight_variables_and_updating_lb_ub_constraints(merged_model, modelNames):
     # defining the variables for the biomass weights
     name2expression = {m:merged_model.problem.Variable(m+'_biomass_weight', lb=0, ub=1000, type="continuous") for m in modelNames}
     merged_model.add_cons_vars(name2expression.values())
@@ -78,19 +78,23 @@ def get_exchange_rxn_met_mapping(model):
     exchange_mets = [list(i.metabolites.keys())[0].id for i in model.exchanges] # all the exchange metabolites in the model
     return pd.DataFrame({'Exchange_rxns':exchange_reactions, 'Exchange_mets':exchange_mets})
 
-def add_metabolomics_constraints(merged_model, exchangeRate, met2rxn, beta=0):
+def add_metabolomics_constraints(merged_model, exchangeRate, met2rxn, growthRate, beta=0):
     metabolomics_constraints = []
+    consumption_rates = []
     for met in list(exchangeRate['metabolite ID']):
         exc_rxns = list(met2rxn[met2rxn.Exchange_mets.apply(lambda x: met in x)]['Exchange_rxns'])
-        consumption_rate = exchangeRate[exchangeRate['metabolite ID']==met]['Consumed'].values[0]
+        temp =(exchangeRate[exchangeRate['metabolite ID']==met]['GF_conc'].values[0] - exchangeRate[exchangeRate['metabolite ID']==met]['Microbiome_conc'].values[0])*growthRate
+        consumption_rate = temp
+        consumption_rates.append(consumption_rate)
         sd = exchangeRate[exchangeRate['metabolite ID']==met]['SD'].values[0]
-        # constraint = merged_model.problem.Constraint(sum([merged_model.reactions.get_by_id(r).flux_expression for r in exc_rxns])+consumption_rate, lb=-beta, ub=beta,name=f"{met}_metabolomics_constraint")
+        constraint = merged_model.problem.Constraint(sum([merged_model.reactions.get_by_id(r).flux_expression for r in exc_rxns])+consumption_rate, lb=-beta, ub=beta,name=f"{met}_metabolomics_constraint")
         # constraint = merged_model.problem.Constraint(sum([merged_model.reactions.get_by_id(r).flux_expression for r in exc_rxns]), lb=-consumption_rate, ub=0,name=f"{met}_metabolomics_constraint")
-        constraint = merged_model.problem.Constraint(sum([merged_model.reactions.get_by_id(r).flux_expression for r in exc_rxns]), lb=-consumption_rate-sd, ub=-consumption_rate+sd,name=f"{met}_metabolomics_constraint")
+        # constraint = merged_model.problem.Constraint(sum([merged_model.reactions.get_by_id(r).flux_expression for r in exc_rxns]), lb=-consumption_rate-sd, ub=-consumption_rate+sd,name=f"{met}_metabolomics_constraint")
         metabolomics_constraints.append(constraint)
+    exchangeRate['Consumed'] = consumption_rates
     merged_model.add_cons_vars(metabolomics_constraints)
     merged_model.solver.update()
-    return merged_model
+    return merged_model,exchangeRate
 
 def add_absolute_values_constraints(merged_model, modelNames, exp_weights):
     constraints = []
@@ -136,15 +140,22 @@ def simulateCommunityModel(modelDetails, exchangeRate, mu, solver='gurobi',alpha
     ## running the simulation
     models, biomass_reactions =load_and_process_models(modelPaths, modelNames)
     merged_model = merge_models(models)
-    merged_model = add_biomass_weight_and_update_constraints(merged_model, modelNames)
+    print("Models are merged")
+    merged_model = add_biomass_weight_variables_and_updating_lb_ub_constraints(merged_model, modelNames)
+    print("Lower and upper bounds are updated based on the biomass weights")
     merged_model = add_biomass_flux_constraints(growthRate, merged_model, biomass_reactions, modelNames)
-    
+    print("Biomass flux constraints are added based on the growth rate")
     merged_model = add_total_biomass_constraint(X0, merged_model, modelNames, alpha)
+    print("Total biomass constraint is added")
     met2rxn = get_exchange_rxn_met_mapping(merged_model)
-    merged_model = add_metabolomics_constraints(merged_model, exchangeRate, met2rxn, beta)
+    merged_model, exchangeRate = add_metabolomics_constraints(merged_model, exchangeRate, met2rxn, growthRate, beta)
+    print("Metabolomics constraints are added")
     merged_model = add_absolute_values_constraints(merged_model, modelNames, exp_weights)
+    print("Absolute value constraints are added that are needed for the objective function")
     merged_model = set_model_objective(merged_model, modelNames)
+    print("Optimizing the model")
     solution = merged_model.optimize(objective_sense=None)
+    print("Optimization is done")
     df_biomass = compare_actual_vs_predicted_biomass(merged_model,exp_weights, modelNames)
     print('Comparing the actual and predicted biomass weights')
     print(df_biomass)
