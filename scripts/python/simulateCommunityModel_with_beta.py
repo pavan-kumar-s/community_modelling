@@ -78,26 +78,31 @@ def get_exchange_rxn_met_mapping(model):
     return pd.DataFrame({'Exchange_rxns':exchange_reactions, 'Exchange_mets':exchange_mets})
 
 
-def add_metabolomics_constraints(merged_model, exchangeRate, met2rxn, growthRate, n_sd=1):
+def add_metabolomics_constraints(merged_model, exchangeRate, met2rxn, growthRate):
     metabolomics_constraints = []
     consumption_rates = []
     for met in list(exchangeRate['metabolite ID']):
         com_conc = exchangeRate[exchangeRate['metabolite ID']==met]['Microbiome_conc'].values[0]
-        com_sd = exchangeRate[exchangeRate['metabolite ID']==met]['Microbiome_conc_sd'].values[0]
         gf_conc = exchangeRate[exchangeRate['metabolite ID']==met]['GF_conc'].values[0]
-        gf_sd = exchangeRate[exchangeRate['metabolite ID']==met]['GF_conc_sd'].values[0]
 
+        # creating a beta variable speicific to the metabolite
+        beta = merged_model.problem.Variable(f"beta_{met}", lb=0, ub=10, type="continuous")
         # Adding the variables representing the concentration of the metabolite in the community and GF mice
-        s_com = merged_model.problem.Variable(f"com_conc_{met}", lb=com_conc-com_sd*n_sd, ub=com_conc+com_sd*n_sd, type="continuous")
-        s_gf = merged_model.problem.Variable(f"gf_conc_{met}", lb=gf_conc-gf_sd*n_sd, ub=gf_conc+gf_sd*n_sd, type="continuous")
+        s_com = merged_model.problem.Variable(f"com_conc_{met}", lb=0, ub=1000, type="continuous")
+        s_gf = merged_model.problem.Variable(f"gf_conc_{met}", lb=0, ub=1000, type="continuous")
+        s_gf_lb_constraint = merged_model.problem.Constraint(s_gf+beta, lb=gf_conc, name=f"{met}_gf_lb")
+        s_gf_ub_constraint = merged_model.problem.Constraint(s_gf-beta, ub=gf_conc, name=f"{met}_gf_ub")
+        s_com_lb_constraint = merged_model.problem.Constraint(s_com+beta, lb=com_conc, name=f"{met}_com_lb")
+        s_com_ub_constraint = merged_model.problem.Constraint(s_com-beta, ub=com_conc, name=f"{met}_com_ub")
 
-        consumption_rate =(s_gf - s_com)*growthRate # constraint referring to the consumption rate of the metabolite
-        consumption_rates.append((gf_conc-com_conc)*growthRate) # storing the mean consumption rate of the metabolite for comparison
-        
         exc_rxns = list(met2rxn[met2rxn.Exchange_mets.apply(lambda x: met in x)]['Exchange_rxns']) # getting the list of exchange reactions for the metabolite
-        constraint = merged_model.problem.Constraint(sum([merged_model.reactions.get_by_id(r).flux_expression for r in exc_rxns])+consumption_rate, lb=0, ub=0,name=f"{met}_metabolomics_constraint")
+        consumption_rate =(s_gf - s_com)*growthRate # constraint referring to the consumption rate of the metabolite
+        met_constraint = merged_model.problem.Constraint(sum([merged_model.reactions.get_by_id(r).flux_expression for r in exc_rxns])+consumption_rate, lb=0, ub=0,name=f"{met}_metabolomics_constraint")
         
-        metabolomics_constraints.append(constraint)
+        metabolomics_constraints.extend([s_gf_lb_constraint, s_gf_ub_constraint, s_com_lb_constraint, s_com_ub_constraint, met_constraint])
+
+
+        consumption_rates.append((gf_conc-com_conc)*growthRate) # storing the mean consumption rate of the metabolite for comparison
     exchangeRate['Consumed'] = consumption_rates # updating the exchangeRate dataframe with the mean consumption rate
     merged_model.add_cons_vars(metabolomics_constraints)
     merged_model.solver.update()
@@ -115,8 +120,8 @@ def add_absolute_values_constraints(merged_model, modelNames, exp_weights):
     merged_model.solver.update()
     return merged_model
 
-def set_model_objective(merged_model, modelNames):
-    objective = merged_model.problem.Objective(sum([merged_model.variables['z_'+modelName] for modelName in modelNames]), direction='min')
+def set_model_objective(merged_model, modelNames, exchangeRate):
+    objective = merged_model.problem.Objective(sum([merged_model.variables['z_'+modelName] for modelName in modelNames])+sum([merged_model.variables['beta_'+met] for met in list(exchangeRate['metabolite ID'])]), direction='min')
     merged_model.objective = objective
     return merged_model
 
@@ -134,7 +139,7 @@ def compare_actual_vs_predicted_metabolomics_consumption(merged_model,exchangeRa
     df = pd.DataFrame({'Metabolite':list(exchangeRate['metabolite ID']), 'Predicted':predicted_consumption, 'Actual':actual_consumption})
     return df
 
-def simulateCommunityModel(modelDetails, exchangeRate, mu, solver='gurobi', n_sd=1, alpha=0):
+def simulateCommunityModel_with_beta(modelDetails, exchangeRate, mu, solver='gurobi', alpha=0):
     cobra_config = cobra.Configuration()
     cobra_config.solver = solver
 
@@ -155,11 +160,11 @@ def simulateCommunityModel(modelDetails, exchangeRate, mu, solver='gurobi', n_sd
     merged_model = add_total_biomass_constraint(X0, merged_model, modelNames, alpha)
     print("Total biomass constraint is added")
     met2rxn = get_exchange_rxn_met_mapping(merged_model)
-    merged_model, exchangeRate = add_metabolomics_constraints(merged_model, exchangeRate, met2rxn, growthRate, n_sd)
+    merged_model, exchangeRate = add_metabolomics_constraints(merged_model, exchangeRate, met2rxn, growthRate)
     print("Metabolomics constraints are added")
     merged_model = add_absolute_values_constraints(merged_model, modelNames, exp_weights)
     print("Absolute value constraints are added that are needed for the objective function")
-    merged_model = set_model_objective(merged_model, modelNames)
+    merged_model = set_model_objective(merged_model, modelNames, exchangeRate)
     print("Optimizing the model")
     solution = merged_model.optimize(objective_sense=None)
     print("Optimization is done")
