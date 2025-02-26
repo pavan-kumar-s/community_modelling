@@ -139,7 +139,19 @@ def compare_actual_vs_predicted_metabolomics_consumption(merged_model,exchangeRa
     df = pd.DataFrame({'Metabolite':list(exchangeRate['metabolite ID']), 'Predicted':predicted_consumption, 'Actual':actual_consumption})
     return df
 
-def simulateCommunityModel_with_beta(modelDetails, exchangeRate, mu, solver='gurobi', alpha=0):
+def compare_actual_vs_predicted_metabolomics_production(merged_model, productionRate, met2rxn, growthRate):
+    predicted_production, actual_production = [],[]
+    for met in list(productionRate['metabolite ID']):
+        exc_rxns = list(met2rxn[met2rxn.Exchange_mets.apply(lambda x: met in x)]['Exchange_rxns'])
+        gf_conc = productionRate[productionRate['metabolite ID']==met]['GF_conc'].values[0]
+        com_conc = productionRate[productionRate['metabolite ID']==met]['Microbiome_conc'].values[0]
+        produced_rate = (com_conc-gf_conc)*growthRate
+        actual_production.append(produced_rate)
+        predicted_production.append(sum([merged_model.reactions.get_by_id(r).flux for r in exc_rxns]))
+    df = pd.DataFrame({'Metabolite':list(productionRate['metabolite ID']), 'Predicted':predicted_production, 'Actual':actual_production})
+    return df
+
+def simulateCommunityModel_with_beta(modelDetails, exchangeRate, mu, solver='gurobi', alpha=0,productionRate=None):
     cobra_config = cobra.Configuration()
     cobra_config.solver = solver
 
@@ -171,9 +183,15 @@ def simulateCommunityModel_with_beta(modelDetails, exchangeRate, mu, solver='gur
     df_biomass = compare_actual_vs_predicted_biomass(merged_model,exp_weights, modelNames)
     print('Comparing the actual and predicted biomass weights')
     print(df_biomass)
-    df_metabolomics = compare_actual_vs_predicted_metabolomics_consumption(merged_model,exchangeRate, met2rxn)
     print('Comparing the actual and predicted metabolomics consumption rates by the community')
-    print(df_metabolomics)
-    return solution, merged_model, df_biomass, df_metabolomics
+    df_metabolomics_consumed = compare_actual_vs_predicted_metabolomics_consumption(merged_model,exchangeRate, met2rxn)
+    print(df_metabolomics_consumed)
+    if productionRate is not None:
+        print('Comparing the actual and predicted metabolomics production rates by the community')
+        df_metabolomics_produced = compare_actual_vs_predicted_metabolomics_production(merged_model,productionRate, met2rxn, growthRate)
+        print(df_metabolomics_produced)
+        return solution, merged_model, df_biomass, df_metabolomics_consumed, df_metabolomics_produced
+    else:
+        return solution, merged_model, df_biomass, df_metabolomics_consumed
 
     
