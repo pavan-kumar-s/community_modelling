@@ -13,7 +13,8 @@ def load_and_process_models(path2models, modelNames):
             model = load_json_model(path)
         elif path.endswith('.xml'):
             model = read_sbml_model(path)
-
+        model.solver.problem.Params.FeasibilityTol = 1e-9
+        model.solver.problem.Params.OptimalityTol = 1e-9
         # Rename reactions
         for reaction in model.reactions:
             reaction.id = f"{modelNames[path2models.index(path)]}_{reaction.id}"
@@ -120,8 +121,8 @@ def add_absolute_values_constraints(merged_model, modelNames, exp_weights):
     merged_model.solver.update()
     return merged_model
 
-def set_model_objective(merged_model, modelNames, exchangeRate):
-    objective = merged_model.problem.Objective(sum([merged_model.variables['z_'+modelName] for modelName in modelNames])+sum([merged_model.variables['beta_'+met] for met in list(exchangeRate['metabolite ID'])]), direction='min')
+def set_model_objective(merged_model, modelNames, exchangeRate,wt=0.5):
+    objective = merged_model.problem.Objective(wt*sum([merged_model.variables['z_'+modelName] for modelName in modelNames])+(1-wt)*sum([merged_model.variables['beta_'+met] for met in list(exchangeRate['metabolite ID'])]), direction='min')
     merged_model.objective = objective
     return merged_model
 
@@ -151,10 +152,10 @@ def compare_actual_vs_predicted_metabolomics_production(merged_model, production
     df = pd.DataFrame({'Metabolite':list(productionRate['metabolite ID']), 'Predicted':predicted_production, 'Actual':actual_production})
     return df
 
-def simulateCommunityModel_with_beta(modelDetails, exchangeRate, mu, solver='gurobi', alpha=0,productionRate=None):
+def simulateCommunityModel_with_beta(modelDetails, exchangeRate, mu, solver='gurobi', alpha=0,productionRate=None, tradeoff=0.5):
     cobra_config = cobra.Configuration()
     cobra_config.solver = solver
-
+    
     modelPaths = list(modelDetails.Path)
     modelNames = list(modelDetails.Name)
     exp_weights = list(modelDetails.weight)
@@ -176,7 +177,7 @@ def simulateCommunityModel_with_beta(modelDetails, exchangeRate, mu, solver='gur
     print("Metabolomics constraints are added")
     merged_model = add_absolute_values_constraints(merged_model, modelNames, exp_weights)
     print("Absolute value constraints are added that are needed for the objective function")
-    merged_model = set_model_objective(merged_model, modelNames, exchangeRate)
+    merged_model = set_model_objective(merged_model, modelNames, exchangeRate, tradeoff)
     print("Optimizing the model")
     solution = merged_model.optimize(objective_sense=None)
     print("Optimization is done")

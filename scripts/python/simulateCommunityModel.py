@@ -13,7 +13,8 @@ def load_and_process_models(path2models, modelNames):
             model = load_json_model(path)
         elif path.endswith('.xml'):
             model = read_sbml_model(path)
-
+        model.solver.problem.Params.FeasibilityTol = 1e-9
+        model.solver.problem.Params.OptimalityTol = 1e-9
         # Rename reactions
         for reaction in model.reactions:
             reaction.id = f"{modelNames[path2models.index(path)]}_{reaction.id}"
